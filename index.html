@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PROTÓTIPO – bastão e balança por Web Serial</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 12px; background: #111; color: #eee; }
+  h1 { font-size: 16px; margin: 0 0 4px; }
+  .aviso { background: #7a4b00; padding: 6px 8px; border-radius: 6px; font-size: 13px; margin-bottom: 10px; }
+  .amb { font-size: 12px; color: #aaa; margin-bottom: 10px; word-break: break-all; }
+  .porta { border: 1px solid #444; border-radius: 8px; padding: 8px; margin-bottom: 10px; }
+  .porta h2 { font-size: 15px; margin: 0 0 6px; }
+  .estado { font-size: 13px; margin: 6px 0; }
+  .ok { color: #6fdc6f; } .ruim { color: #ff7b7b; } .meio { color: #ffd166; }
+  button { font-size: 15px; padding: 10px 12px; margin: 3px 3px 3px 0; border-radius: 6px; border: 0; background: #2d6cdf; color: #fff; }
+  button.sec { background: #444; }
+  button:disabled { opacity: .4; }
+  input[type=text] { font-size: 14px; padding: 8px; width: 100%; box-sizing: border-box; background: #222; color: #eee; border: 1px solid #555; border-radius: 6px; margin: 3px 0; }
+  label { font-size: 13px; }
+  .ultima { font-family: monospace; font-size: 14px; background: #1c1c1c; padding: 6px; border-radius: 6px; min-height: 20px; word-break: break-all; }
+  #log { font-family: monospace; font-size: 11px; white-space: pre-wrap; word-break: break-all; background: #000; border: 1px solid #333; border-radius: 6px; padding: 6px; height: 45vh; overflow-y: auto; }
+  details { margin: 6px 0; font-size: 13px; }
+</style>
+</head>
+<body>
+<h1>PROTÓTIPO – bastão e balança por Web Serial</h1>
+<div class="aviso">Descartável. Só registra o que chega pela porta serial Bluetooth. Pareie o bastão (PIN 1234) e a balança nas configurações de Bluetooth do Android antes de conectar aqui.</div>
+<div class="amb" id="amb"></div>
+
+<div class="porta" id="A">
+  <h2>A – Bastão</h2>
+  <button data-acao="conectar">Conectar</button>
+  <button data-acao="desconectar" class="sec" disabled>Desconectar</button>
+  <div class="estado">Estado: <span data-campo="estado" class="ruim">desconectado</span></div>
+  <div class="estado">Última linha:</div>
+  <div class="ultima" data-campo="ultima"></div>
+  <details><summary>Enviar texto ao aparelho</summary>
+    <input type="text" data-campo="envio" placeholder="texto; \r e \n são convertidos">
+    <button data-acao="enviar" class="sec" disabled>Enviar</button>
+  </details>
+</div>
+
+<div class="porta" id="B">
+  <h2>B – Balança</h2>
+  <button data-acao="conectar">Conectar</button>
+  <button data-acao="desconectar" class="sec" disabled>Desconectar</button>
+  <div class="estado">Estado: <span data-campo="estado" class="ruim">desconectado</span></div>
+  <div class="estado">Última linha:</div>
+  <div class="ultima" data-campo="ultima"></div>
+  <details><summary>Enviar texto ao aparelho</summary>
+    <input type="text" data-campo="envio" placeholder="texto; \r e \n são convertidos">
+    <button data-acao="enviar" class="sec" disabled>Enviar</button>
+  </details>
+</div>
+
+<details>
+  <summary>Opções de conexão</summary>
+  <label><input type="checkbox" id="filtroSpp"> Mostrar só portas do perfil serial padrão (SPP)</label><br>
+  <label>UUID de serviço fora do padrão (se o aparelho não aparecer na lista):</label>
+  <input type="text" id="uuidExtra" placeholder="ex.: 0000ffe0-0000-1000-8000-00805f9b34fb">
+  <label><input type="checkbox" id="religar" checked> Tentar religar sozinho quando a conexão cair</label>
+</details>
+
+<button id="jaAutorizadas" class="sec">Listar portas já autorizadas</button>
+<button id="nota" class="sec">Anotar no registro</button>
+<button id="compartilhar">Enviar registro (WhatsApp)</button>
+<button id="copiar" class="sec">Copiar registro</button>
+<button id="baixar" class="sec">Baixar .txt</button>
+<button id="limpar" class="sec">Limpar</button>
+<div id="log"></div>
+
+<script>
+const SPP = '00001101-0000-1000-8000-00805f9b34fb';
+const linhas = [];
+const elLog = document.getElementById('log');
+
+function agora() {
+  const d = new Date();
+  const p = (n, t = 2) => String(n).padStart(t, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+}
+function log(quem, msg) {
+  const l = `${agora()} [${quem}] ${msg}`;
+  linhas.push(l);
+  elLog.textContent += l + '\n';
+  elLog.scrollTop = elLog.scrollHeight;
+}
+// Mostra cada byte: imprimíveis como estão, o resto como \r, \n ou \xNN.
+function visivel(bytes) {
+  let s = '';
+  for (const b of bytes) {
+    if (b === 13) s += '\\r';
+    else if (b === 10) s += '\\n';
+    else if (b === 9) s += '\\t';
+    else if (b >= 32 && b < 127) s += String.fromCharCode(b);
+    else s += '\\x' + b.toString(16).padStart(2, '0');
+  }
+  return s;
+}
+const hex = bytes => Array.from(bytes, b => b.toString(16).padStart(2, '0')).join(' ');
+
+document.getElementById('amb').textContent =
+  `navigator.serial: ${'serial' in navigator ? 'existe' : 'NÃO EXISTE'} | contexto seguro: ${isSecureContext} | ${navigator.userAgent}`;
+log('--', document.getElementById('amb').textContent);
+if (navigator.userAgentData) {
+  navigator.userAgentData.getHighEntropyValues(['fullVersionList', 'model', 'platformVersion'])
+    .then(v => log('--', `aparelho: ${v.model} | Android ${v.platformVersion} | ${v.fullVersionList.map(b => b.brand + ' ' + b.version).join(', ')}`))
+    .catch(() => {});
+}
+
+const portas = {};
+for (const id of ['A', 'B']) {
+  const raiz = document.getElementById(id);
+  const p = portas[id] = {
+    id, raiz, porta: null, leitor: null, querAberta: false, resto: [],
+    campo: n => raiz.querySelector(`[data-campo=${n}]`),
+    botao: n => raiz.querySelector(`[data-acao=${n}]`),
+  };
+  p.botao('conectar').onclick = () => conectar(p);
+  p.botao('desconectar').onclick = () => desconectar(p);
+  p.botao('enviar').onclick = () => enviar(p);
+}
+
+function estado(p, texto, classe) {
+  const e = p.campo('estado');
+  e.textContent = texto; e.className = classe;
+  const aberta = classe === 'ok';
+  p.botao('desconectar').disabled = !p.querAberta;
+  p.botao('enviar').disabled = !aberta;
+  p.botao('conectar').disabled = p.querAberta;
+}
+
+async function conectar(p) {
+  if (!('serial' in navigator)) { log(p.id, 'ERRO: este navegador não tem Web Serial'); return; }
+  const opcoes = {};
+  if (document.getElementById('filtroSpp').checked) opcoes.filters = [{ bluetoothServiceClassId: SPP }];
+  const extra = document.getElementById('uuidExtra').value.trim().toLowerCase();
+  if (extra) opcoes.allowedBluetoothServiceClassIds = [extra];
+  try {
+    log(p.id, `requestPort(${JSON.stringify(opcoes)})`);
+    p.porta = await navigator.serial.requestPort(opcoes);
+  } catch (e) {
+    log(p.id, `requestPort falhou: ${e.name}: ${e.message}`);
+    return;
+  }
+  log(p.id, `porta escolhida: getInfo() = ${JSON.stringify(p.porta.getInfo())} | connected = ${p.porta.connected}`);
+  p.porta.addEventListener('connect', () => log(p.id, 'evento connect na porta'));
+  p.porta.addEventListener('disconnect', () => log(p.id, 'evento disconnect na porta'));
+  p.querAberta = true;
+  manterAberta(p);
+}
+
+// Abre, lê até cair e, se pedido, tenta de novo a cada 2 s.
+async function manterAberta(p) {
+  let tentativa = 0;
+  while (p.querAberta) {
+    tentativa++;
+    estado(p, tentativa === 1 ? 'abrindo…' : `religando (tentativa ${tentativa})…`, 'meio');
+    const t0 = performance.now();
+    try {
+      await p.porta.open({ baudRate: 9600 });
+      log(p.id, `ABERTA em ${Math.round(performance.now() - t0)} ms (tentativa ${tentativa})`);
+      tentativa = 0;
+      estado(p, 'conectado', 'ok');
+      await ler(p);
+      log(p.id, 'leitura terminou (porta fechada ou conexão caiu)');
+    } catch (e) {
+      log(p.id, `open/leitura falhou: ${e.name}: ${e.message}`);
+    }
+    try { await p.porta.close(); } catch (e) {}
+    if (!p.querAberta) break;
+    if (!document.getElementById('religar').checked) { p.querAberta = false; break; }
+    estado(p, 'caiu; aguardando para religar', 'ruim');
+    await new Promise(r => setTimeout(r, 2000));
+  }
+  estado(p, 'desconectado', 'ruim');
+}
+
+async function ler(p) {
+  p.leitor = p.porta.readable.getReader();
+  try {
+    while (true) {
+      const { value, done } = await p.leitor.read();
+      if (done) break;
+      if (!value || !value.length) continue;
+      log(p.id, `RX ${value.length}B  ${visivel(value)}   | ${hex(value)}`);
+      for (const b of value) {
+        p.resto.push(b);
+        if (b === 10) fecharLinha(p);
+      }
+      // Sem \n em 300 ms, mostra o que juntou (o terminador pode ser só \r ou nenhum).
+      clearTimeout(p.timer);
+      p.timer = setTimeout(() => fecharLinha(p), 300);
+    }
+  } finally {
+    try { p.leitor.releaseLock(); } catch (e) {}
+    p.leitor = null;
+  }
+}
+function fecharLinha(p) {
+  if (!p.resto.length) return;
+  p.campo('ultima').textContent = `${agora()}  ${visivel(p.resto)}`;
+  p.resto = [];
+}
+
+async function desconectar(p) {
+  p.querAberta = false;
+  log(p.id, 'desconectar pedido pelo usuário');
+  try { if (p.leitor) await p.leitor.cancel(); } catch (e) { log(p.id, `cancel falhou: ${e.message}`); }
+}
+
+async function enviar(p) {
+  const txt = p.campo('envio').value.replace(/\\r/g, '\r').replace(/\\n/g, '\n');
+  const bytes = new TextEncoder().encode(txt);
+  try {
+    const w = p.porta.writable.getWriter();
+    await w.write(bytes);
+    w.releaseLock();
+    log(p.id, `TX ${bytes.length}B  ${visivel(bytes)}`);
+  } catch (e) { log(p.id, `envio falhou: ${e.name}: ${e.message}`); }
+}
+
+if ('serial' in navigator) {
+  navigator.serial.addEventListener('connect', e => log('--', `evento connect global: ${JSON.stringify(e.target.getInfo ? e.target.getInfo() : {})}`));
+  navigator.serial.addEventListener('disconnect', e => log('--', `evento disconnect global: ${JSON.stringify(e.target.getInfo ? e.target.getInfo() : {})}`));
+}
+document.getElementById('jaAutorizadas').onclick = async () => {
+  try {
+    const ps = await navigator.serial.getPorts();
+    log('--', `getPorts(): ${ps.length} porta(s) já autorizada(s): ${ps.map(x => JSON.stringify(x.getInfo()) + ' connected=' + x.connected).join(' ; ')}`);
+  } catch (e) { log('--', `getPorts falhou: ${e.name}: ${e.message}`); }
+};
+document.getElementById('nota').onclick = () => {
+  const n = prompt('Anotação (ex.: "li o brinco 123", "desliguei o bastão", "apertei R")');
+  if (n) log('NOTA', n);
+};
+document.getElementById('compartilhar').onclick = async () => {
+  try { await navigator.share({ title: 'Registro do teste bastão e balança', text: linhas.join('\n') }); }
+  catch (e) { alert('Não consegui compartilhar (' + e.message + '). Use "Copiar registro" e cole no WhatsApp.'); }
+};
+document.getElementById('copiar').onclick = async () => {
+  try { await navigator.clipboard.writeText(linhas.join('\n')); alert('Registro copiado.'); }
+  catch (e) { alert('Não consegui copiar: ' + e.message); }
+};
+document.getElementById('baixar').onclick = () => {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([linhas.join('\n')], { type: 'text/plain' }));
+  a.download = `web-serial-${new Date().toISOString().replace(/[:.]/g, '-')}.txt`;
+  a.click();
+};
+document.getElementById('limpar').onclick = () => { linhas.length = 0; elLog.textContent = ''; };
+document.addEventListener('visibilitychange', () => log('--', `página ${document.visibilityState}`));
+</script>
+</body>
+</html>
