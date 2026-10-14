@@ -21,6 +21,13 @@
   .ultima { font-family: monospace; font-size: 14px; background: #1c1c1c; padding: 6px; border-radius: 6px; min-height: 20px; word-break: break-all; }
   #log { font-family: monospace; font-size: 11px; white-space: pre-wrap; word-break: break-all; background: #000; border: 1px solid #333; border-radius: 6px; padding: 6px; height: 45vh; overflow-y: auto; }
   details { margin: 6px 0; font-size: 13px; }
+  dialog { background: #1c1c1c; color: #eee; border: 1px solid #555; border-radius: 10px; padding: 14px; width: min(92vw, 460px); box-sizing: border-box; }
+  dialog::backdrop { background: rgba(0,0,0,.7); }
+  dialog h3 { font-size: 16px; margin: 0 0 10px; }
+  .passo { display: flex; gap: 10px; align-items: flex-start; background: #262626; border-radius: 8px; padding: 10px; margin-bottom: 8px; font-size: 14px; }
+  .passo input { width: 24px; height: 24px; flex: none; margin: 0; }
+  .passo small { display: block; color: #aaa; margin-top: 4px; }
+  dialog button { width: 100%; margin: 4px 0; }
 </style>
 </head>
 <body>
@@ -30,7 +37,8 @@
 
 <div class="porta" id="A">
   <h2>A – Bastão</h2>
-  <button data-acao="conectar">Conectar</button>
+  <button data-acao="conectarSpp">Conectar (com filtro SPP)</button>
+  <button data-acao="conectarSem" class="sec">Conectar (sem filtro)</button>
   <button data-acao="desconectar" class="sec" disabled>Desconectar</button>
   <div class="estado">Estado: <span data-campo="estado" class="ruim">desconectado</span></div>
   <div class="estado">Última linha:</div>
@@ -43,7 +51,8 @@
 
 <div class="porta" id="B">
   <h2>B – Balança</h2>
-  <button data-acao="conectar">Conectar</button>
+  <button data-acao="conectarSpp">Conectar (com filtro SPP)</button>
+  <button data-acao="conectarSem" class="sec">Conectar (sem filtro)</button>
   <button data-acao="desconectar" class="sec" disabled>Desconectar</button>
   <div class="estado">Estado: <span data-campo="estado" class="ruim">desconectado</span></div>
   <div class="estado">Última linha:</div>
@@ -56,12 +65,12 @@
 
 <details>
   <summary>Opções de conexão</summary>
-  <label><input type="checkbox" id="filtroSpp"> Mostrar só portas do perfil serial padrão (SPP)</label><br>
   <label>UUID de serviço fora do padrão (se o aparelho não aparecer na lista):</label>
   <input type="text" id="uuidExtra" placeholder="ex.: 0000ffe0-0000-1000-8000-00805f9b34fb">
   <label><input type="checkbox" id="religar" checked> Tentar religar sozinho quando a conexão cair</label>
 </details>
 
+<button id="verChecklist" class="sec">Ver passos antes de conectar</button>
 <button id="jaAutorizadas" class="sec">Listar portas já autorizadas</button>
 <button id="nota" class="sec">Anotar no registro</button>
 <button id="compartilhar">Enviar registro (WhatsApp)</button>
@@ -69,6 +78,30 @@
 <button id="baixar" class="sec">Baixar .txt</button>
 <button id="limpar" class="sec">Limpar</button>
 <div id="log"></div>
+
+<dialog id="checklist">
+  <h3>Antes de conectar</h3>
+  <label class="passo"><input type="checkbox" data-passo="permissao"><span>Dê ao <b>Chrome</b> a permissão <b>Dispositivos por perto</b>.
+    <small>Configurações do celular › Apps › Chrome › Permissões › Dispositivos por perto › Permitir. A permissão dada ao app "Teste Leitura" não vale para o Chrome.</small></span></label>
+  <label class="passo"><input type="checkbox" data-passo="fecharApp"><span>Feche o app <b>Teste Leitura</b> e o <b>iRancho</b>.
+    <small>Tire os dois da lista de aplicativos abertos. O bastão só aceita uma conexão por vez.</small></span></label>
+  <label class="passo"><input type="checkbox" data-passo="religar"><span><b>Desligue e ligue o bastão</b> e espere 30 segundos.</span></label>
+  <label class="passo"><input type="checkbox" data-passo="pareado"><span>O bastão aparece como <b>pareado</b> nas configurações de Bluetooth do celular.
+    <small>Se não aparecer, pareie (senha 1234).</small></span></label>
+  <p style="font-size:14px">Depois, no quadro do bastão, toque primeiro em <b>Conectar (com filtro SPP)</b>. Se a lista vier vazia, tente <b>Conectar (sem filtro)</b>.</p>
+  <button id="checklistPronto">Pronto</button>
+</dialog>
+
+<dialog id="oQueApareceu">
+  <h3>O que apareceu na lista do Chrome?</h3>
+  <button data-resposta="lista vazia">A lista veio vazia</button>
+  <button data-resposta="o bastão apareceu, mas cancelei">O bastão apareceu, mas cancelei</button>
+  <button data-resposta="apareceram outros aparelhos, mas não o bastão">Apareceram outros aparelhos, mas não o bastão</button>
+  <button data-resposta="pediu permissão e eu não dei">O Chrome pediu permissão e eu não dei</button>
+  <button data-resposta="nenhuma lista apareceu">Nenhuma lista apareceu</button>
+  <p id="dicaVazia" style="font-size:13px;color:#ffd166"></p>
+  <button class="sec" id="fecharResposta">Fechar</button>
+</dialog>
 
 <script>
 const SPP = '00001101-0000-1000-8000-00805f9b34fb';
@@ -117,7 +150,8 @@ for (const id of ['A', 'B']) {
     campo: n => raiz.querySelector(`[data-campo=${n}]`),
     botao: n => raiz.querySelector(`[data-acao=${n}]`),
   };
-  p.botao('conectar').onclick = () => conectar(p);
+  p.botao('conectarSpp').onclick = () => conectar(p, true);
+  p.botao('conectarSem').onclick = () => conectar(p, false);
   p.botao('desconectar').onclick = () => desconectar(p);
   p.botao('enviar').onclick = () => enviar(p);
 }
@@ -128,13 +162,14 @@ function estado(p, texto, classe) {
   const aberta = classe === 'ok';
   p.botao('desconectar').disabled = !p.querAberta;
   p.botao('enviar').disabled = !aberta;
-  p.botao('conectar').disabled = p.querAberta;
+  p.botao('conectarSpp').disabled = p.querAberta;
+  p.botao('conectarSem').disabled = p.querAberta;
 }
 
-async function conectar(p) {
+async function conectar(p, comFiltro) {
   if (!('serial' in navigator)) { log(p.id, 'ERRO: este navegador não tem Web Serial'); return; }
   const opcoes = {};
-  if (document.getElementById('filtroSpp').checked) opcoes.filters = [{ bluetoothServiceClassId: SPP }];
+  if (comFiltro) opcoes.filters = [{ bluetoothServiceClassId: SPP }];
   const extra = document.getElementById('uuidExtra').value.trim().toLowerCase();
   if (extra) opcoes.allowedBluetoothServiceClassIds = [extra];
   try {
@@ -142,6 +177,7 @@ async function conectar(p) {
     p.porta = await navigator.serial.requestPort(opcoes);
   } catch (e) {
     log(p.id, `requestPort falhou: ${e.name}: ${e.message}`);
+    if (e.name === 'NotFoundError') perguntarOQueApareceu(p, comFiltro);
     return;
   }
   log(p.id, `porta escolhida: getInfo() = ${JSON.stringify(p.porta.getInfo())} | connected = ${p.porta.connected}`);
@@ -250,6 +286,33 @@ document.getElementById('baixar').onclick = () => {
   a.click();
 };
 document.getElementById('limpar').onclick = () => { linhas.length = 0; elLog.textContent = ''; };
+// Checklist: abre ao carregar e registra quais passos foram marcados.
+const elChecklist = document.getElementById('checklist');
+document.getElementById('verChecklist').onclick = () => elChecklist.showModal();
+document.getElementById('checklistPronto').onclick = () => {
+  const passos = [...elChecklist.querySelectorAll('[data-passo]')].map(c => `${c.dataset.passo}=${c.checked ? 'feito' : 'não'}`);
+  log('PASSOS', passos.join(' | '));
+  elChecklist.close();
+};
+elChecklist.showModal();
+
+// Depois de uma lista fechada sem escolha, pergunta o que o Chrome mostrou.
+const elResposta = document.getElementById('oQueApareceu');
+function perguntarOQueApareceu(p, comFiltro) {
+  elResposta.dataset.id = p.id;
+  document.getElementById('dicaVazia').textContent = comFiltro
+    ? 'Se veio vazia, tente também "Conectar (sem filtro)".'
+    : 'Se veio vazia, tente também "Conectar (com filtro SPP)" e confira os passos (botão "Ver passos antes de conectar").';
+  elResposta.showModal();
+}
+for (const b of elResposta.querySelectorAll('[data-resposta]')) {
+  b.onclick = () => { log(elResposta.dataset.id, `lista do Chrome: ${b.dataset.resposta}`); elResposta.close(); };
+}
+document.getElementById('fecharResposta').onclick = () => elResposta.close();
+
+// Registra logo de cara as portas que o Chrome já autorizou para esta página.
+if ('serial' in navigator) document.getElementById('jaAutorizadas').click();
+
 document.addEventListener('visibilitychange', () => log('--', `página ${document.visibilityState}`));
 </script>
 </body>
